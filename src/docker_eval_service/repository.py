@@ -16,7 +16,19 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
-from .scorer import CriterionComparison, CriterionScore, PairwiseResult, RubricResult
+from .scorer import (
+    CRITERIA,
+    CriterionComparison,
+    CriterionScore,
+    PairwiseResult,
+    RubricResult,
+)
+
+# The rubric's criterion order (factual_accuracy, reasoning_quality,
+# instruction_adherence, helpfulness, safety). Scores are stored one
+# row per criterion with no position column, so reads must restore
+# this order explicitly — see _criteria_from_rows.
+_CRITERION_ORDER = {name: i for i, name in enumerate(CRITERIA)}
 
 try:
     from psycopg.rows import dict_row
@@ -170,6 +182,23 @@ class Repository(Protocol):
 
 
 def _criteria_from_rows(rows: list[dict]) -> list[CriterionScore]:
+    """Criteria in rubric order, not database order.
+
+    PostgreSQL returns rows in no guaranteed order, and ``ORDER BY
+    criterion`` is alphabetical, which is *not* the rubric's order:
+    alphabetically ``helpfulness`` comes second and
+    ``reasoning_quality`` fourth, the reverse of the rubric. A fetched
+    evaluation must round-trip exactly (same criteria, same order),
+    so sort by the rubric here. A criterion the rubric does not know
+    sorts last, alphabetically, rather than breaking the read.
+    """
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            _CRITERION_ORDER.get(row["criterion"], len(_CRITERION_ORDER)),
+            row["criterion"],
+        ),
+    )
     return [
         CriterionScore(
             criterion=row["criterion"],
@@ -177,7 +206,7 @@ def _criteria_from_rows(rows: list[dict]) -> list[CriterionScore]:
             rationale=row["rationale"],
             evidence=row["evidence"] or "",
         )
-        for row in rows
+        for row in ordered
     ]
 
 
